@@ -44,7 +44,7 @@
 
 .NOTES
     Build:
-      Invoke-PS2EXE .\DeployDuo_2026v23.ps1 .\DeployDuo.exe -noConsole -requireAdmin -DPIAware -STA -title "Duo Deployment"
+      Invoke-PS2EXE .\DeployDuo.ps1 .\DeployDuo.exe -noConsole -requireAdmin -DPIAware -STA -title "Duo Deployment"
 #>
 [CmdletBinding()]
 param(
@@ -392,7 +392,19 @@ $Worker = {
         Start-Phase 'Step 4 of 13: Copying policy templates and MSIs'
         $policyRoot    = 'C:\Windows\PolicyDefinitions'
         $enUS          = Join-Path $policyRoot 'en-us'
-        $sysvolScripts = 'C:\Windows\SYSVOL\domain\scripts'
+        # Ask the server where its NETLOGON / SYSVOL shares really live. C:\Windows\SYSVOL\domain is only a junction to
+        # C:\Windows\SYSVOL\sysvol\<domain> and is missing or stale on some servers (and SYSVOL can be relocated off C:).
+        $adDom = Get-ADDomain
+        $sysvolScripts = $null
+        $sysvolShareRoot = $null
+        try { $nl = (Get-SmbShare -Name 'NETLOGON' -ErrorAction Stop).Path; if ($nl -and (Test-Path -LiteralPath $nl)) { $sysvolScripts = $nl } } catch { }
+        try { $sv = (Get-SmbShare -Name 'SYSVOL'   -ErrorAction Stop).Path; if ($sv -and (Test-Path -LiteralPath $sv)) { $sysvolShareRoot = $sv } } catch { }
+        if (-not $sysvolScripts) {
+            $sysvolScripts = 'C:\Windows\SYSVOL\sysvol\{0}\scripts' -f $adDom.DNSRoot
+            if (-not (Test-Path -LiteralPath $sysvolScripts)) { $sysvolScripts = 'C:\Windows\SYSVOL\domain\scripts' }
+            Write-Log "NETLOGON share path not readable; falling back to $sysvolScripts" 'WARN'
+        }
+        else { Write-Log "NETLOGON share is $sysvolScripts" }
         Ensure-Directory $policyRoot    'PolicyDefinitions'
         Ensure-Directory $enUS          'en-us'
         Ensure-Directory $sysvolScripts 'SYSVOL'
@@ -403,7 +415,8 @@ $Worker = {
 
         # If the domain has a Central Store, GPMC reads templates ONLY from there and ignores the local folder,
         # so the Duo templates must be in it too. The local copy above stays as the fallback for domains without one.
-        $centralStore = 'C:\Windows\SYSVOL\domain\Policies\PolicyDefinitions'
+        $centralStore = if ($sysvolShareRoot) { Join-Path $sysvolShareRoot ('{0}\Policies\PolicyDefinitions' -f $adDom.DNSRoot) }
+                        else { 'C:\Windows\SYSVOL\domain\Policies\PolicyDefinitions' }
         if (Test-Path -LiteralPath $centralStore) {
             Write-Log "Central Store found at $centralStore; copying Duo templates there too"
             $centralEn = Join-Path $centralStore 'en-US'
@@ -431,6 +444,18 @@ $Worker = {
                 Write-Log ('MST generation failed for {0}: {1}' -f $t.Msi, $_.Exception.Message) 'ERROR'
                 Add-Failure ('mst_generation_failed:{0}' -f $t.Tag)
             }
+        }
+
+        # Sanity check: clients read these over the network, so confirm they are visible through the NETLOGON share itself
+        $unc = '\\{0}\NETLOGON' -f $env:COMPUTERNAME
+        $missingNl = @()
+        foreach ($f in 'DuoWindowsLogon64.msi', 'duo1.mst', 'DuoWindowsLogonARM64.msi', 'duo1-arm64.mst', 'DuoWindowsLogon32.msi', 'duo1-x86.mst') {
+            if (-not (Test-Path -LiteralPath (Join-Path $unc $f))) { $missingNl += $f }
+        }
+        if ($missingNl.Count -eq 0) { Write-Log "All installers and transforms are visible at $unc" 'OK' }
+        else {
+            Write-Log ('Not visible at {0}: {1}' -f $unc, ($missingNl -join ', ')) 'ERROR'
+            Add-Failure 'netlogon_files_missing'
         }
         Complete-Phase
 
