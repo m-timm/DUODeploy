@@ -464,9 +464,32 @@ $Worker = {
         $proxyInstaller = Join-Path $duoPath 'duoauthproxy-latest.exe'
         if (Test-Path -LiteralPath $proxyInstaller) {
             try {
+                # Overlay/upgrade: a running service or an open Proxy Manager keeps the installer from replacing files,
+                # so stop both first. Step 13 starts the service again.
+                function Get-ProxyVersion {
+                    $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+                    $e = Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Duo Authentication Proxy*' } | Select-Object -First 1
+                    if ($e) { [string]$e.DisplayVersion } else { $null }
+                }
+                $verBefore = Get-ProxyVersion
+                if ($verBefore) { Write-Log "Existing Auth Proxy $verBefore found; upgrading in place" }
+                $svc = Get-Service -Name 'duoauthproxy' -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -ne 'Stopped') {
+                    Write-Log 'Stopping the duoauthproxy service before installing'
+                    Stop-Service -Name 'duoauthproxy' -Force -ErrorAction SilentlyContinue
+                    try { (Get-Service -Name 'duoauthproxy').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { }
+                }
+                foreach ($proc in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(authproxy|DuoAuthenticationProxy)' })) {
+                    try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop; Write-Log ("Closed {0} (was holding Auth Proxy files)" -f $proc.ProcessName) } catch { }
+                }
+
                 $r = Invoke-Quiet $proxyInstaller '/S /V /qn'
+                if ($r.Output) { Write-Log ('Auth Proxy installer output: {0}' -f (($r.Output -split "`r?`n" | Select-Object -First 5) -join ' | ')) }
                 if ($r.ExitCode -ne 0) { throw "installer exit code $($r.ExitCode)" }
-                Write-Log 'Auth Proxy installed' 'OK'
+                $verAfter = Get-ProxyVersion
+                if ($verAfter) { Write-Log "Auth Proxy installed (version $verAfter)" 'OK' }
+                else { Write-Log 'Auth Proxy installer returned 0 but no Duo Authentication Proxy entry was found' 'WARN' }
+                if ($verBefore -and $verAfter -and $verBefore -eq $verAfter) { Write-Log "Auth Proxy version unchanged ($verAfter); it was already current or the upgrade did not apply" 'WARN' }
             }
             catch {
                 Write-Log ('Auth Proxy installation failed: {0}' -f $_.Exception.Message) 'ERROR'
