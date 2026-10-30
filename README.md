@@ -5,6 +5,13 @@ distributes Duo Windows Logon to every domain machine through a Group Policy sta
 
 Built as a PowerShell script (`DeployDuo.ps1`) compiled to an exe with [PS2EXE](https://github.com/MScholtes/PS2EXE).
 
+> **Independent project.** DUODeploy was built by TR Computer Sales as a convenience for our own deployments. It is
+> **unofficial** and is **not affiliated with, endorsed by, or supported by Duo Security or Cisco**. It automates the
+> steps in Duo's own documentation, [Duo Authentication for Windows Logon: Group Policy](https://duo.com/docs/winlogon-gpo)
+> and [Duo Directory Sync / Active Directory](https://duo.com/docs/adsync), and Duo's names and services are
+> referenced only to describe what is being deployed. Questions or problems with this tool belong with TR Computer
+> Sales, not Duo support. Review what it does and test it before using it in production.
+
 ## What you need
 
 - A domain controller, run **as administrator** (the exe requests elevation).
