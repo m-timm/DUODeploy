@@ -99,6 +99,6 @@ so PS2EXE doesn't pop dialogs. Keep the script name `DeployDuo.ps1`; git history
 ## Repo contents
 
 - `DeployDuo.ps1`: the tool.
-- `DeployDuo_2026v23.exe`: compiled build (one version behind the script until rebuilt).
+- `DeployDuo.exe`: compiled build of `DeployDuo.ps1`.
 - `DUO_Windows_Login_GPO.zip`: GPO backup the tool downloads and imports at runtime. The tool pulls it from this repo,
   so don't rename or move it.
